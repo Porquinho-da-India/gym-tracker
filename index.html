@@ -237,6 +237,7 @@
   }
   .field{
     flex:1; display:flex; flex-direction:column; gap:6px;
+    min-width: 0;
   }
   .field label{
     font-size: 10px; letter-spacing:0.12em; color: var(--text-faint); text-transform:uppercase;
@@ -251,6 +252,13 @@
     font-size: 14px;
     font-family: inherit;
     width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+  .field input[type="date"],
+  .field input[type="time"]{
+    font-size: 13px;
+    padding: 11px 6px;
   }
   .field input:focus{ outline:none; border-color: var(--accent); }
   .field input::-webkit-calendar-picker-indicator{ filter: invert(0.6); }
@@ -1299,7 +1307,7 @@
           <button class="add-preset-btn" id="newPresetBtn">+ New Preset</button>
         </div>
 
-        <div class="app-version">Iron Log &middot; v1.1</div>
+        <div class="app-version">Iron Log &middot; v1.2</div>
       </div>
     `;
     app.innerHTML = html;
