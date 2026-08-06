@@ -235,6 +235,9 @@
   .meta-row{
     display:flex; gap:10px; padding: 0 20px 18px;
   }
+  .meta-row-grid{
+    display:grid; grid-template-columns: 1fr 1fr; gap:14px; padding: 0 20px 18px;
+  }
   .field{
     flex:1; display:flex; flex-direction:column; gap:6px;
     min-width: 0;
@@ -257,8 +260,10 @@
   }
   .field input[type="date"],
   .field input[type="time"]{
-    font-size: 13px;
-    padding: 11px 6px;
+    font-size: 12.5px;
+    padding: 11px 4px;
+    min-width: 0;
+    overflow: hidden;
   }
   .field input:focus{ outline:none; border-color: var(--accent); }
   .field input::-webkit-calendar-picker-indicator{ filter: invert(0.6); }
@@ -1126,6 +1131,41 @@
     });
   }
 
+  // Finds the heaviest set logged for this exercise the last time it appeared
+  // in any saved session, so a newly-added exercise can start pre-filled with
+  // what needs beating. Returns { weightKg, reps } or null if never logged.
+  function getLastBestSet(name){
+    const key = (name || '').trim().toLowerCase();
+    if(!key) return null;
+    let best = null; // { createdAt, weightKg, reps }
+    state.sessions.forEach(s=>{
+      (s.exercises||[]).forEach(ex=>{
+        if(!ex.name || ex.name.trim().toLowerCase() !== key) return;
+        let maxSet = null;
+        (ex.sets||[]).forEach(set=>{
+          const w = parseFloat(set.weightKg);
+          if(isNaN(w)) return;
+          const r = parseFloat(set.reps) || 0;
+          if(!maxSet){
+            maxSet = set;
+          } else {
+            const curW = parseFloat(maxSet.weightKg);
+            const curR = parseFloat(maxSet.reps) || 0;
+            if(w > curW || (w === curW && r > curR)){
+              maxSet = set;
+            }
+          }
+        });
+        if(!maxSet) return;
+        const when = s.createdAt || 0;
+        if(!best || when > best.createdAt){
+          best = { createdAt: when, weightKg: maxSet.weightKg, reps: maxSet.reps };
+        }
+      });
+    });
+    return best;
+  }
+
   function todayStr(){
     const d = new Date();
     return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
@@ -1307,7 +1347,7 @@
           <button class="add-preset-btn" id="newPresetBtn">+ New Preset</button>
         </div>
 
-        <div class="app-version">Iron Log &middot; v1.3</div>
+        <div class="app-version">Iron Log &middot; v1.6</div>
       </div>
     `;
     app.innerHTML = html;
@@ -1514,7 +1554,9 @@
     const d = state.draft;
     if(!d.name || !d.name.trim()) d.name = preset.name;
     preset.exercises.forEach(name=>{
-      d.exercises.push({ id: uid(), name, sets: [{ weightKg: '', reps: '' }], isPR: false });
+      const lastBest = getLastBestSet(name);
+      const initialSet = lastBest ? { weightKg: lastBest.weightKg, reps: lastBest.reps } : { weightKg: '', reps: '' };
+      d.exercises.push({ id: uid(), name, sets: [initialSet], isPR: false });
     });
     state.openExerciseIdx = null;
     render();
@@ -1607,12 +1649,12 @@
             <input type="text" id="nameInput" value="${escapeHtml(d.name || '')}" placeholder="e.g. Cool session" autocomplete="off">
           </div>
         </div>
-        <div class="meta-row">
-          <div class="field" style="flex:1">
+        <div class="meta-row-grid">
+          <div class="field">
             <label>Date</label>
             <input type="date" id="dateInput" value="${d.date || ''}">
           </div>
-          <div class="field" style="flex:1">
+          <div class="field">
             <label>Time (optional)</label>
             <input type="time" id="timeInput" value="${d.time || ''}">
           </div>
@@ -1670,7 +1712,9 @@
     const addEx = (nameOverride)=>{
       const name = (nameOverride !== undefined ? nameOverride : newExInput.value).trim();
       if(!name) return;
-      d.exercises.push({ id: uid(), name, sets: [{ weightKg: '', reps: '' }], isPR: false });
+      const lastBest = getLastBestSet(name);
+      const initialSet = lastBest ? { weightKg: lastBest.weightKg, reps: lastBest.reps } : { weightKg: '', reps: '' };
+      d.exercises.push({ id: uid(), name, sets: [initialSet], isPR: false });
       state.openExerciseIdx = d.exercises.length - 1;
       newExInput.value = '';
       hideSuggestions();
@@ -1801,7 +1845,9 @@
       el.onclick = (e)=>{
         e.stopPropagation();
         const idx = Number(el.dataset.idx);
-        d.exercises[idx].sets.push({ weightKg: '', reps: '' });
+        const firstSet = d.exercises[idx].sets[0];
+        const newSet = firstSet ? { weightKg: firstSet.weightKg, reps: firstSet.reps } : { weightKg: '', reps: '' };
+        d.exercises[idx].sets.push(newSet);
         render();
         const openBody = document.querySelector('.exercise-card .exercise-body');
         if(openBody){
@@ -1809,7 +1855,12 @@
           const last = rows[rows.length - 1];
           if(last){
             const input = last.querySelector('.set-field input');
-            if(input) setTimeout(()=> input.focus(), 30);
+            if(input){
+              setTimeout(()=>{
+                input.focus();
+                input.select();
+              }, 30);
+            }
           }
         }
       };
