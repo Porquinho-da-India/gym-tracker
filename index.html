@@ -179,9 +179,12 @@
     padding: 16px 18px;
     cursor:pointer;
     display:flex; flex-direction:column; gap:8px;
-    transition: border-color .15s ease;
+    transition: border-color .15s ease, transform .15s ease, opacity .15s ease;
+    -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none;
   }
   .session-card:active{ border-color: var(--accent-dim); }
+  .session-card.pressing{ transform: scale(0.97); opacity: 0.85; }
   .session-card .row-top{
     display:flex; justify-content:space-between; align-items:center;
   }
@@ -463,7 +466,8 @@
     font-size: 11px; color: var(--text-dim); margin-top: 3px;
   }
   .preset-row-actions{ display:flex; gap:4px; flex-shrink:0; }
-  .preset-row-actions .icon-btn{ font-size: 17px; padding: 6px; }
+  .preset-row-actions .icon-btn{ font-size: 19px; padding: 6px; }
+  .preset-row-actions .icon-btn[data-delete-preset]{ font-weight: 300; }
   .add-preset-btn{
     width:100%;
     background:none; border:none; border-top: 1px solid var(--line);
@@ -1292,7 +1296,50 @@
     } else {
       document.getElementById('newSessionBtn').onclick = startNewSession;
       document.querySelectorAll('.session-card').forEach(el=>{
+        let pressTimer = null;
+        let longPressFired = false;
+        let startX = 0, startY = 0;
+        const MOVE_THRESHOLD = 10;
+        const LONG_PRESS_MS = 550;
+
+        const cancelPress = ()=>{
+          if(pressTimer){ clearTimeout(pressTimer); pressTimer = null; }
+          el.classList.remove('pressing');
+        };
+
+        el.addEventListener('pointerdown', (e)=>{
+          if(e.pointerType === 'mouse' && e.button !== 0) return;
+          longPressFired = false;
+          startX = e.clientX; startY = e.clientY;
+          pressTimer = setTimeout(()=>{
+            longPressFired = true;
+            el.classList.remove('pressing');
+            if(navigator.vibrate) navigator.vibrate(15);
+            const sessionId = el.dataset.id;
+            showConfirmModal('Are you sure you want to delete this session?', ()=>{
+              state.sessions = state.sessions.filter(s=> s.id !== sessionId);
+              persistSessions();
+              render();
+              showToast('🗑️ Session removed');
+            });
+          }, LONG_PRESS_MS);
+          setTimeout(()=>{ if(pressTimer) el.classList.add('pressing'); }, 100);
+        });
+        el.addEventListener('pointermove', (e)=>{
+          if(!pressTimer) return;
+          if(Math.abs(e.clientX - startX) > MOVE_THRESHOLD || Math.abs(e.clientY - startY) > MOVE_THRESHOLD){
+            cancelPress();
+          }
+        });
+        el.addEventListener('pointerup', cancelPress);
+        el.addEventListener('pointercancel', cancelPress);
+        el.addEventListener('pointerleave', cancelPress);
+
         el.onclick = ()=>{
+          if(longPressFired){
+            longPressFired = false;
+            return;
+          }
           state.detailId = el.dataset.id;
           state.detailOpenIdx = null;
           state.view = 'detail';
@@ -1390,14 +1437,14 @@
               </div>
               <div class="preset-row-actions">
                 <button class="icon-btn" data-edit-preset="${i}" title="Edit preset">&#9998;</button>
-                <button class="icon-btn" data-delete-preset="${i}" title="Delete preset">&#128465;</button>
+                <button class="icon-btn" data-delete-preset="${i}" title="Delete preset">&times;</button>
               </div>
             </div>
           `).join('') : `<div class="empty-ex-hint" style="padding:18px;">No presets yet. Build one so a familiar session is one tap away.</div>`}
           <button class="add-preset-btn" id="newPresetBtn">+ New Preset</button>
         </div>
 
-        <div class="app-version">Iron Log &middot; v2.1</div>
+        <div class="app-version">Iron Log &middot; v2.2</div>
       </div>
     `;
     app.innerHTML = html;
