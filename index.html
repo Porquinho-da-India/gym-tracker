@@ -1210,7 +1210,12 @@
       <div class="topbar">
         <div class="brand"><span class="plate-mark"></span> IRON LOG</div>
         <div class="topbar-right">
-          <button class="icon-btn" id="settingsBtn" title="Settings">&#9881;</button>
+          <button class="icon-btn" id="settingsBtn" title="Settings">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+          </button>
           ${unitToggleHTML()}
         </div>
       </div>`;
@@ -1352,7 +1357,7 @@
           <button class="add-preset-btn" id="newPresetBtn">+ New Preset</button>
         </div>
 
-        <div class="app-version">Iron Log &middot; v1.7</div>
+        <div class="app-version">Iron Log &middot; v1.9</div>
       </div>
     `;
     app.innerHTML = html;
@@ -1850,8 +1855,9 @@
       el.onclick = (e)=>{
         e.stopPropagation();
         const idx = Number(el.dataset.idx);
-        const firstSet = d.exercises[idx].sets[0];
-        const newSet = firstSet ? { weightKg: firstSet.weightKg, reps: firstSet.reps } : { weightKg: '', reps: '' };
+        const sets = d.exercises[idx].sets;
+        const prevSet = sets[sets.length - 1];
+        const newSet = prevSet ? { weightKg: prevSet.weightKg, reps: prevSet.reps } : { weightKg: '', reps: '' };
         d.exercises[idx].sets.push(newSet);
         render();
         const openBody = document.querySelector('.exercise-card .exercise-body');
