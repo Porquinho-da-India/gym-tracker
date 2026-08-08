@@ -1397,7 +1397,7 @@
           <button class="add-preset-btn" id="newPresetBtn">+ New Preset</button>
         </div>
 
-        <div class="app-version">Iron Log &middot; v2.0</div>
+        <div class="app-version">Iron Log &middot; v2.1</div>
       </div>
     `;
     app.innerHTML = html;
@@ -1568,7 +1568,11 @@
       render();
     };
     if(hasData){
-      showConfirmModal('Discard this preset?', proceed, { onNo: armBackTrap });
+      showConfirmModal(
+        state.presetEditingId ? 'Discard your changes?' : 'Discard this preset? Nothing will be saved.',
+        proceed,
+        { onNo: armBackTrap }
+      );
     } else {
       proceed();
     }
