@@ -1088,12 +1088,15 @@
       overlay.classList.remove('show');
       setTimeout(()=> overlay.remove(), 150);
     }
-    overlay.querySelector('.confirm-no').onclick = close;
+    overlay.querySelector('.confirm-no').onclick = ()=>{
+      close();
+      if(opts.onNo) opts.onNo();
+    };
     overlay.querySelector('.confirm-yes').onclick = ()=>{
       close();
       onYes();
     };
-    overlay.onclick = (e)=>{ if(e.target === overlay) close(); };
+    overlay.onclick = (e)=>{ if(e.target === overlay){ close(); if(opts.onNo) opts.onNo(); } };
   }
 
   function fmtDate(d){
@@ -1191,17 +1194,54 @@
     });
   }
 
+  // --- Android/Chrome hardware & gesture back-button support ---
+  // Since this is a single-page app, the browser has no real navigation
+  // history by default, so the back button just exits the app. We push a
+  // "trap" history entry whenever we're on a non-home screen so back
+  // presses land on our own popstate handler instead of closing the app.
+  let lastNavView = 'home';
+
+  function armBackTrap(){
+    try{ history.pushState({ appNav: true }, '', location.href); }catch(e){ /* ignore */ }
+  }
+
+  function syncHistoryForCurrentView(){
+    if(state.view === lastNavView) return;
+    if(state.view !== 'home') armBackTrap();
+    lastNavView = state.view;
+  }
+
+  function handleSystemBack(){
+    if(state.view === 'editor'){
+      confirmDiscard();
+    } else if(state.view === 'presetEditor'){
+      confirmDiscardPreset();
+    } else if(state.view === 'detail'){
+      state.view = 'home';
+      state.detailId = null;
+      render();
+    } else if(state.view === 'settings'){
+      state.view = 'home';
+      render();
+    }
+    // if state.view is already 'home', do nothing — let this back press
+    // exit the app normally, same as any other native app.
+  }
+
+  window.addEventListener('popstate', handleSystemBack);
+
   /* ---------------- RENDER ---------------- */
   function render(){
     if(state.view === 'loading'){
       app.innerHTML = '';
       return;
     }
-    if(state.view === 'home') return renderHome();
-    if(state.view === 'editor') return renderEditor();
-    if(state.view === 'detail') return renderDetail();
-    if(state.view === 'settings') return renderSettings();
-    if(state.view === 'presetEditor') return renderPresetEditor();
+    if(state.view === 'home') renderHome();
+    else if(state.view === 'editor') renderEditor();
+    else if(state.view === 'detail') renderDetail();
+    else if(state.view === 'settings') renderSettings();
+    else if(state.view === 'presetEditor') renderPresetEditor();
+    syncHistoryForCurrentView();
   }
 
   function renderHome(){
@@ -1357,7 +1397,7 @@
           <button class="add-preset-btn" id="newPresetBtn">+ New Preset</button>
         </div>
 
-        <div class="app-version">Iron Log &middot; v1.9</div>
+        <div class="app-version">Iron Log &middot; v2.0</div>
       </div>
     `;
     app.innerHTML = html;
@@ -1528,7 +1568,7 @@
       render();
     };
     if(hasData){
-      showConfirmModal('Discard this preset?', proceed);
+      showConfirmModal('Discard this preset?', proceed, { onNo: armBackTrap });
     } else {
       proceed();
     }
@@ -1919,7 +1959,8 @@
     if(hasData){
       showConfirmModal(
         state.editingId ? 'Discard your changes?' : 'Discard this session? Nothing will be saved.',
-        proceed
+        proceed,
+        { onNo: armBackTrap }
       );
     } else {
       proceed();
