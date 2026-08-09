@@ -25,6 +25,8 @@
     --accent-active: #c93a24;
     --accent-shadow-06: rgba(232,68,44,0.06);
     --accent-shadow-35: rgba(232,68,44,0.35);
+    --danger: #e8442c;
+    --danger-active: #c93a24;
     --text: #f2f0eb;
     --text-dim: #8b909a;
     --text-faint: #565a62;
@@ -185,6 +187,41 @@
   }
   .session-card:active{ border-color: var(--accent-dim); }
   .session-card.pressing{ transform: scale(0.97); opacity: 0.85; }
+
+  .drag-dim-overlay{
+    position: fixed; inset:0;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: brightness(0.5);
+    -webkit-backdrop-filter: brightness(0.5);
+    z-index: 150;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity .28s ease;
+  }
+  .drag-dim-overlay.show{ opacity: 1; }
+
+  .session-card-ghost{
+    position: fixed;
+    z-index: 200;
+    pointer-events: none;
+    box-shadow: 0 24px 48px rgba(0,0,0,0.45), 0 0 0 2px var(--accent), 0 0 22px var(--accent-shadow-35);
+    transition: none;
+  }
+  .session-card-ghost.snapping{
+    transition: transform .3s cubic-bezier(.34,1.56,.64,1), opacity .3s ease;
+  }
+  .session-card-ghost.deleting{
+    transition: left .22s ease, top .22s ease, transform .22s ease, opacity .22s ease;
+  }
+
+  .fab.delete-target-mode button{
+    box-shadow: 0 8px 20px var(--accent-shadow-35);
+    transition: transform .32s cubic-bezier(.34,1.56,.64,1), box-shadow .32s ease;
+  }
+  .fab.delete-target-mode.hover button{
+    transform: scale(1.18);
+  }
+
   .session-card .row-top{
     display:flex; justify-content:space-between; align-items:center;
   }
@@ -214,7 +251,11 @@
     width: calc(100% - 40px);
     display:flex; justify-content:flex-end;
     pointer-events:none;
-    z-index: 30;
+    z-index: 160;
+  }
+  .fab-inner{
+    display: flex;
+    transition: transform .32s cubic-bezier(.34,1.56,.64,1);
   }
   .fab button{
     pointer-events:all;
@@ -226,6 +267,7 @@
     display:flex; align-items:center; justify-content:center;
     cursor:pointer;
     box-shadow: 0 8px 20px var(--accent-shadow-35);
+    transition: transform .15s ease, box-shadow .15s ease;
   }
   .fab button:active{ transform: scale(0.93); }
 
@@ -1072,6 +1114,146 @@
 
   // Custom confirm dialog: browser confirm()/alert() are blocked in this
   // sandboxed environment, so we build our own Yes/No modal.
+  // --- Drag-to-delete on session cards (triggered by long-press) ---
+  // The card "lifts" off the list (grows, follows the finger, background
+  // dims) and the FAB turns into a × drop target. Dropping the card on the
+  // FAB deletes it; releasing anywhere else snaps the card back into place
+  // with no changes made.
+  const FAB_DROP_RADIUS = 70; // px — generous hit zone around the FAB, not just its visible size
+
+  function startCardDrag(el, pointerId, startX, startY, onEnd){
+    const sessionId = el.dataset.id;
+    const rect = el.getBoundingClientRect();
+    const fabWrap = document.getElementById('fabWrap');
+    const fabInner = document.getElementById('fabInner');
+
+    const overlay = document.createElement('div');
+    overlay.className = 'drag-dim-overlay';
+    document.body.appendChild(overlay);
+    // Force the browser to register the initial (opacity:0) state before we
+    // flip the class, otherwise it can collapse both into one paint and the
+    // fade never actually plays — it just snaps.
+    overlay.getBoundingClientRect();
+    requestAnimationFrame(()=>{
+      requestAnimationFrame(()=> overlay.classList.add('show'));
+    });
+
+    const ghost = el.cloneNode(true);
+    ghost.className = 'session-card session-card-ghost';
+    ghost.style.left = rect.left + 'px';
+    ghost.style.top = rect.top + 'px';
+    ghost.style.width = rect.width + 'px';
+    ghost.style.transition = 'transform .18s ease';
+    document.body.appendChild(ghost);
+    ghost.getBoundingClientRect();
+    requestAnimationFrame(()=>{
+      requestAnimationFrame(()=>{
+        ghost.style.transform = 'scale(1.06)';
+        // Once the initial "pick up" pop finishes, drop the transition so
+        // live dragging tracks the finger instantly with no rubber-banding.
+        setTimeout(()=>{ ghost.style.transition = 'none'; }, 190);
+      });
+    });
+
+    el.style.visibility = 'hidden';
+
+    if(fabWrap){
+      fabWrap.classList.add('delete-target-mode');
+      document.getElementById('newSessionBtn').innerHTML = '&times;';
+      if(fabInner){
+        // Move the button from its resting right-aligned spot to the
+        // horizontal center of the FAB's container, smoothly.
+        const wrapRect = fabWrap.getBoundingClientRect();
+        const innerRect = fabInner.getBoundingClientRect();
+        const wrapCenterX = wrapRect.left + wrapRect.width/2;
+        const innerCenterX = innerRect.left + innerRect.width/2;
+        const offset = wrapCenterX - innerCenterX;
+        fabInner.style.transform = `translateX(${offset}px)`;
+      }
+    }
+
+    function fabCenter(){
+      if(!fabWrap) return null;
+      const btn = fabWrap.querySelector('button');
+      const r = btn.getBoundingClientRect();
+      return { x: r.left + r.width/2, y: r.top + r.height/2 };
+    }
+
+    function cleanup(){
+      overlay.classList.remove('show');
+      setTimeout(()=> overlay.remove(), 200);
+      if(fabWrap){
+        fabWrap.classList.remove('delete-target-mode', 'hover');
+        const btn = document.getElementById('newSessionBtn');
+        if(btn) btn.innerHTML = '+';
+      }
+      if(fabInner) fabInner.style.transform = '';
+      if(onEnd) onEnd();
+    }
+
+    function onMove(e){
+      if(e.pointerId !== pointerId) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      ghost.style.transform = `translate(${dx}px, ${dy}px) scale(1.06)`;
+
+      const center = fabCenter();
+      if(fabWrap && center){
+        const gx = rect.left + rect.width/2 + dx;
+        const gy = rect.top + rect.height/2 + dy;
+        const dist = Math.hypot(gx - center.x, gy - center.y);
+        fabWrap.classList.toggle('hover', dist < FAB_DROP_RADIUS);
+      }
+    }
+
+    function onUp(e){
+      if(e.pointerId !== pointerId) return;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      const center = fabCenter();
+      const gx = rect.left + rect.width/2 + dx;
+      const gy = rect.top + rect.height/2 + dy;
+      const dropped = center && Math.hypot(gx - center.x, gy - center.y) < FAB_DROP_RADIUS;
+
+      if(dropped){
+        if(navigator.vibrate) navigator.vibrate(20);
+        ghost.style.transition = '';
+        ghost.classList.add('deleting');
+        if(center){
+          ghost.style.left = (center.x - rect.width/2) + 'px';
+          ghost.style.top = (center.y - rect.height/2) + 'px';
+        }
+        ghost.style.transform = 'scale(0.15)';
+        ghost.style.opacity = '0';
+        setTimeout(()=>{
+          ghost.remove();
+          state.sessions = state.sessions.filter(s=> s.id !== sessionId);
+          persistSessions();
+          cleanup();
+          render();
+          showToast('🗑️ Session removed');
+        }, 220);
+      } else {
+        ghost.style.transition = '';
+        ghost.classList.add('snapping');
+        ghost.style.transform = 'translate(0px, 0px) scale(1)';
+        setTimeout(()=>{
+          ghost.remove();
+          el.style.visibility = '';
+          cleanup();
+        }, 260);
+      }
+    }
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }
+
   function showConfirmModal(message, onYes, opts){
     opts = opts || {};
     const overlay = document.createElement('div');
@@ -1281,7 +1463,7 @@
           </div>
           ${sorted.map(s => sessionCardHTML(s)).join('')}
         </div>
-        <div class="fab"><button id="newSessionBtn">+</button></div>`;
+        <div class="fab" id="fabWrap"><div class="fab-inner" id="fabInner"><button id="newSessionBtn">+</button></div></div>`;
     }
 
     app.innerHTML = html;
@@ -1298,6 +1480,7 @@
       document.querySelectorAll('.session-card').forEach(el=>{
         let pressTimer = null;
         let longPressFired = false;
+        let dragMode = false;
         let startX = 0, startY = 0;
         const MOVE_THRESHOLD = 10;
         const LONG_PRESS_MS = 550;
@@ -1308,20 +1491,16 @@
         };
 
         el.addEventListener('pointerdown', (e)=>{
+          if(dragMode) return;
           if(e.pointerType === 'mouse' && e.button !== 0) return;
           longPressFired = false;
           startX = e.clientX; startY = e.clientY;
           pressTimer = setTimeout(()=>{
             longPressFired = true;
+            dragMode = true;
             el.classList.remove('pressing');
             if(navigator.vibrate) navigator.vibrate(15);
-            const sessionId = el.dataset.id;
-            showConfirmModal('Are you sure you want to delete this session?', ()=>{
-              state.sessions = state.sessions.filter(s=> s.id !== sessionId);
-              persistSessions();
-              render();
-              showToast('🗑️ Session removed');
-            });
+            startCardDrag(el, e.pointerId, startX, startY, ()=>{ dragMode = false; });
           }, LONG_PRESS_MS);
           setTimeout(()=>{ if(pressTimer) el.classList.add('pressing'); }, 100);
         });
@@ -1340,6 +1519,7 @@
             longPressFired = false;
             return;
           }
+          if(dragMode) return;
           state.detailId = el.dataset.id;
           state.detailOpenIdx = null;
           state.view = 'detail';
@@ -1444,7 +1624,7 @@
           <button class="add-preset-btn" id="newPresetBtn">+ New Preset</button>
         </div>
 
-        <div class="app-version">Iron Log &middot; v2.2</div>
+        <div class="app-version">Iron Log &middot; v2.7</div>
       </div>
     `;
     app.innerHTML = html;
