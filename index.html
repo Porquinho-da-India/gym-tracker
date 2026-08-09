@@ -1127,6 +1127,15 @@
     const fabWrap = document.getElementById('fabWrap');
     const fabInner = document.getElementById('fabInner');
 
+    // Stop the browser from hijacking this gesture as a page scroll once
+    // we've committed to a drag. touch-action alone isn't always honored if
+    // set mid-gesture on every browser, so we back it up with a non-passive
+    // touchmove listener that force-blocks scrolling for real.
+    document.body.style.overscrollBehavior = 'none';
+    el.style.touchAction = 'none';
+    function preventScroll(e){ e.preventDefault(); }
+    window.addEventListener('touchmove', preventScroll, { passive: false });
+
     const overlay = document.createElement('div');
     overlay.className = 'drag-dim-overlay';
     document.body.appendChild(overlay);
@@ -1188,6 +1197,9 @@
         if(btn) btn.innerHTML = '+';
       }
       if(fabInner) fabInner.style.transform = '';
+      el.style.touchAction = '';
+      document.body.style.overscrollBehavior = '';
+      window.removeEventListener('touchmove', preventScroll, { passive: false });
       if(onEnd) onEnd();
     }
 
@@ -1624,7 +1636,7 @@
           <button class="add-preset-btn" id="newPresetBtn">+ New Preset</button>
         </div>
 
-        <div class="app-version">Iron Log &middot; v2.7</div>
+        <div class="app-version">Iron Log &middot; v2.8</div>
       </div>
     `;
     app.innerHTML = html;
