@@ -112,8 +112,10 @@
     padding: 3px;
     gap: 2px;
     flex-shrink:0;
+    cursor: pointer;
   }
   .unit-toggle button{
+    pointer-events: none;
     border:none; background:none; cursor:pointer;
     font-size: 11px; font-weight:600; letter-spacing:0.04em;
     padding: 6px 12px; border-radius: 999px;
@@ -160,6 +162,67 @@
   .plate-btn:active{ transform: scale(0.94); }
   .empty-state h2{ font-size: 20px; color: var(--text); }
   .empty-state p{ color: var(--text-dim); font-size: 13px; max-width: 260px; line-height:1.5; margin:0; }
+
+  /* ---------- Home tabs + swiper (Sessions / Folders) ---------- */
+  .home-tabs{
+    display:flex; gap:8px;
+    padding: 0 20px 14px;
+    flex-shrink: 0;
+  }
+  .home-tab{
+    flex:1;
+    background: none;
+    border: 1px solid var(--line);
+    color: var(--text-faint);
+    font-family: 'Oswald', sans-serif;
+    font-size: 12.5px; font-weight:600; letter-spacing:0.04em; text-transform:uppercase;
+    padding: 10px;
+    border-radius: 10px;
+    cursor: pointer;
+  }
+  .home-tab.active{
+    background: var(--surface);
+    border-color: var(--accent);
+    color: var(--text);
+  }
+  .home-swiper{
+    display:flex;
+    flex:1;
+    min-height:0;
+    overflow-x:auto;
+    overflow-y:hidden;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .home-swiper::-webkit-scrollbar{ display:none; }
+  .home-page{
+    flex:0 0 100%;
+    width:100%;
+    scroll-snap-align:start;
+    overflow-y:auto;
+    -webkit-overflow-scrolling: touch;
+    min-height:0;
+    display:flex; flex-direction:column;
+  }
+
+  .folder-card{
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+    cursor:pointer;
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    transition: border-color .15s ease;
+  }
+  .folder-card:active{ border-color: var(--accent-dim); }
+  .folder-card-name{
+    font-family:'Oswald', sans-serif; font-size:15px; font-weight:600;
+    text-transform:uppercase; letter-spacing:0.02em;
+  }
+  .folder-card-count{
+    font-size:11px; color:var(--text-dim); margin-top:4px;
+  }
 
   /* ---------- Session list ---------- */
   .session-list{
@@ -252,7 +315,14 @@
     display:flex; justify-content:flex-end;
     pointer-events:none;
     z-index: 160;
+    opacity: 1;
+    transition: opacity .2s ease;
   }
+  .fab.fab-hidden{
+    opacity: 0;
+    pointer-events: none;
+  }
+  .fab.fab-hidden button{ pointer-events: none; }
   .fab-inner{
     display: flex;
     transition: transform .32s cubic-bezier(.34,1.56,.64,1);
@@ -894,7 +964,10 @@
     recentAccents: [],
     presets: [],
     presetDraft: null,
-    presetEditingId: null
+    presetEditingId: null,
+    folders: [],
+    activeHomePage: 'sessions', // 'sessions' | 'folders'
+    folderViewId: null
   };
 
   const STORAGE_KEY = 'sessions';
@@ -902,6 +975,7 @@
   const THEME_KEY = 'theme-pref';
   const ACCENT_KEY = 'accent-pref';
   const PRESETS_KEY = 'presets';
+  const FOLDERS_KEY = 'folders';
   const KG_PER_LB = 0.45359237;
 
   function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
@@ -974,6 +1048,13 @@
       state.presets = p && p.value ? JSON.parse(p.value) : [];
     }catch(e){
       state.presets = [];
+    }
+
+    try{
+      const f = await window.storage.get(FOLDERS_KEY, false);
+      state.folders = f && f.value ? JSON.parse(f.value) : [];
+    }catch(e){
+      state.folders = [];
     }
 
     state.view = 'home';
@@ -1067,6 +1148,14 @@
       await window.storage.set(PRESETS_KEY, JSON.stringify(state.presets), false);
     }catch(e){
       showToast('Could not save preset — try again');
+    }
+  }
+
+  async function persistFolders(){
+    try{
+      await window.storage.set(FOLDERS_KEY, JSON.stringify(state.folders), false);
+    }catch(e){
+      showToast('Could not save folder — try again');
     }
   }
 
@@ -1387,9 +1476,7 @@
   function wireUnitToggle(){
     const el = document.getElementById('unitToggle');
     if(!el) return;
-    el.querySelectorAll('button').forEach(b=>{
-      b.onclick = ()=> setUnit(b.dataset.unit);
-    });
+    el.onclick = ()=> setUnit(state.unit === 'kg' ? 'lb' : 'kg');
   }
 
   // --- Android/Chrome hardware & gesture back-button support ---
@@ -1421,6 +1508,10 @@
     } else if(state.view === 'settings'){
       state.view = 'home';
       render();
+    } else if(state.view === 'folderView'){
+      state.view = 'home';
+      state.folderViewId = null;
+      render();
     }
     // if state.view is already 'home', do nothing — let this back press
     // exit the app normally, same as any other native app.
@@ -1439,11 +1530,66 @@
     else if(state.view === 'detail') renderDetail();
     else if(state.view === 'settings') renderSettings();
     else if(state.view === 'presetEditor') renderPresetEditor();
+    else if(state.view === 'folderView') renderFolderView();
     syncHistoryForCurrentView();
   }
 
+  function wireSessionCardInteractions(el){
+    let pressTimer = null;
+    let longPressFired = false;
+    let dragMode = false;
+    let startX = 0, startY = 0;
+    const MOVE_THRESHOLD = 10;
+    const LONG_PRESS_MS = 550;
+
+    const cancelPress = ()=>{
+      if(pressTimer){ clearTimeout(pressTimer); pressTimer = null; }
+      el.classList.remove('pressing');
+    };
+
+    el.addEventListener('pointerdown', (e)=>{
+      if(dragMode) return;
+      if(e.pointerType === 'mouse' && e.button !== 0) return;
+      longPressFired = false;
+      startX = e.clientX; startY = e.clientY;
+      pressTimer = setTimeout(()=>{
+        longPressFired = true;
+        dragMode = true;
+        el.classList.remove('pressing');
+        if(navigator.vibrate) navigator.vibrate(15);
+        startCardDrag(el, e.pointerId, startX, startY, ()=>{ dragMode = false; });
+      }, LONG_PRESS_MS);
+      setTimeout(()=>{ if(pressTimer) el.classList.add('pressing'); }, 100);
+    });
+    el.addEventListener('pointermove', (e)=>{
+      if(!pressTimer) return;
+      if(Math.abs(e.clientX - startX) > MOVE_THRESHOLD || Math.abs(e.clientY - startY) > MOVE_THRESHOLD){
+        cancelPress();
+      }
+    });
+    el.addEventListener('pointerup', cancelPress);
+    el.addEventListener('pointercancel', cancelPress);
+    el.addEventListener('pointerleave', cancelPress);
+
+    el.onclick = ()=>{
+      if(longPressFired){
+        longPressFired = false;
+        return;
+      }
+      if(dragMode) return;
+      state.detailId = el.dataset.id;
+      state.detailOpenIdx = null;
+      state.view = 'detail';
+      render();
+    };
+  }
+
   function renderHome(){
+    app.style.height = '100vh';
+    app.style.overflow = 'hidden';
     const hasSessions = state.sessions.length > 0;
+    const hasFolders = state.folders.length > 0;
+
     let html = `
       <div class="topbar">
         <div class="brand"><span class="plate-mark"></span> IRON LOG</div>
@@ -1456,27 +1602,59 @@
           </button>
           ${unitToggleHTML()}
         </div>
-      </div>`;
+      </div>
+      <div class="home-tabs" id="homeTabs">
+        <button class="home-tab ${state.activeHomePage==='sessions'?'active':''}" data-page="sessions">Sessions</button>
+        <button class="home-tab ${state.activeHomePage==='folders'?'active':''}" data-page="folders">Folders</button>
+      </div>
+      <div class="home-swiper" id="homeSwiper">
+        <div class="home-page" id="sessionsPage">`;
 
     if(!hasSessions){
       html += `
-        <div class="empty-state">
-          <button class="plate-btn" id="startFirst">+</button>
-          <h2>Start your first session</h2>
-          <p>Log exercises, sets, weight and reps as you go. Everything stays on this device.</p>
-        </div>`;
+          <div class="empty-state">
+            <button class="plate-btn" id="startFirst">+</button>
+            <h2>Start your first session</h2>
+            <p>Log exercises, sets, weight and reps as you go. Everything stays on this device.</p>
+          </div>`;
     } else {
       const sorted = [...state.sessions].sort((a,b)=> (b.createdAt||0) - (a.createdAt||0));
       html += `
-        <div class="session-list">
-          <div class="list-heading">
-            <h2 style="font-size:14px;color:var(--text-dim)">Sessions</h2>
-            <span class="count">${state.sessions.length}</span>
-          </div>
-          ${sorted.map(s => sessionCardHTML(s)).join('')}
-        </div>
-        <div class="fab" id="fabWrap"><div class="fab-inner" id="fabInner"><button id="newSessionBtn">+</button></div></div>`;
+          <div class="session-list">
+            <div class="list-heading">
+              <h2 style="font-size:14px;color:var(--text-dim)">Sessions</h2>
+              <span class="count">${state.sessions.length}</span>
+            </div>
+            ${sorted.map(s => sessionCardHTML(s)).join('')}
+          </div>`;
     }
+
+    html += `
+        </div>
+        <div class="home-page" id="foldersPage">`;
+
+    if(!hasFolders){
+      html += `
+          <div class="empty-state">
+            <button class="plate-btn" id="startFirstFolder">+</button>
+            <h2>Create your first folder</h2>
+            <p>Group sessions like "Push Day" or "Leg Day" to keep things organized as your history grows.</p>
+          </div>`;
+    } else {
+      html += `
+          <div class="session-list">
+            <div class="list-heading">
+              <h2 style="font-size:14px;color:var(--text-dim)">Folders</h2>
+              <span class="count">${state.folders.length}</span>
+            </div>
+            ${state.folders.map(f => folderCardHTML(f)).join('')}
+          </div>`;
+    }
+
+    html += `
+        </div>
+      </div>
+      <div class="fab" id="fabWrap"><div class="fab-inner" id="fabInner"><button id="newSessionBtn">+</button></div></div>`;
 
     app.innerHTML = html;
     wireUnitToggle();
@@ -1485,60 +1663,163 @@
       render();
     };
 
+    const swiper = document.getElementById('homeSwiper');
+    const tabs = document.querySelectorAll('.home-tab');
+    const fabWrap = document.getElementById('fabWrap');
+    function updateFabVisibility(){
+      const visible = state.activeHomePage === 'sessions' ? hasSessions : hasFolders;
+      if(fabWrap) fabWrap.classList.toggle('fab-hidden', !visible);
+    }
+    updateFabVisibility();
+    // Jump straight to whichever page was active last time, no animation.
+    if(state.activeHomePage === 'folders'){
+      swiper.scrollLeft = swiper.clientWidth;
+    }
+    tabs.forEach(tab=>{
+      tab.onclick = ()=>{
+        const page = tab.dataset.page;
+        swiper.scrollTo({ left: page === 'folders' ? swiper.clientWidth : 0, behavior: 'smooth' });
+      };
+    });
+    let scrollRaf = null;
+    swiper.addEventListener('scroll', ()=>{
+      if(scrollRaf) return;
+      scrollRaf = requestAnimationFrame(()=>{
+        scrollRaf = null;
+        const page = swiper.scrollLeft > swiper.clientWidth / 2 ? 'folders' : 'sessions';
+        if(page !== state.activeHomePage){
+          state.activeHomePage = page;
+          tabs.forEach(tab=> tab.classList.toggle('active', tab.dataset.page === page));
+          updateFabVisibility();
+        }
+      });
+    });
+
     if(!hasSessions){
       document.getElementById('startFirst').onclick = startNewSession;
     } else {
-      document.getElementById('newSessionBtn').onclick = startNewSession;
-      document.querySelectorAll('.session-card').forEach(el=>{
-        let pressTimer = null;
-        let longPressFired = false;
-        let dragMode = false;
-        let startX = 0, startY = 0;
-        const MOVE_THRESHOLD = 10;
-        const LONG_PRESS_MS = 550;
+      document.querySelectorAll('#sessionsPage .session-card').forEach(wireSessionCardInteractions);
+    }
 
-        const cancelPress = ()=>{
-          if(pressTimer){ clearTimeout(pressTimer); pressTimer = null; }
-          el.classList.remove('pressing');
-        };
-
-        el.addEventListener('pointerdown', (e)=>{
-          if(dragMode) return;
-          if(e.pointerType === 'mouse' && e.button !== 0) return;
-          longPressFired = false;
-          startX = e.clientX; startY = e.clientY;
-          pressTimer = setTimeout(()=>{
-            longPressFired = true;
-            dragMode = true;
-            el.classList.remove('pressing');
-            if(navigator.vibrate) navigator.vibrate(15);
-            startCardDrag(el, e.pointerId, startX, startY, ()=>{ dragMode = false; });
-          }, LONG_PRESS_MS);
-          setTimeout(()=>{ if(pressTimer) el.classList.add('pressing'); }, 100);
-        });
-        el.addEventListener('pointermove', (e)=>{
-          if(!pressTimer) return;
-          if(Math.abs(e.clientX - startX) > MOVE_THRESHOLD || Math.abs(e.clientY - startY) > MOVE_THRESHOLD){
-            cancelPress();
-          }
-        });
-        el.addEventListener('pointerup', cancelPress);
-        el.addEventListener('pointercancel', cancelPress);
-        el.addEventListener('pointerleave', cancelPress);
-
+    if(!hasFolders){
+      document.getElementById('startFirstFolder').onclick = ()=> showNewFolderModal();
+    } else {
+      document.querySelectorAll('.folder-card').forEach(el=>{
         el.onclick = ()=>{
-          if(longPressFired){
-            longPressFired = false;
-            return;
-          }
-          if(dragMode) return;
-          state.detailId = el.dataset.id;
-          state.detailOpenIdx = null;
-          state.view = 'detail';
+          state.folderViewId = el.dataset.id;
+          state.view = 'folderView';
           render();
         };
+        const delBtn = el.querySelector('[data-delete-folder]');
+        if(delBtn){
+          delBtn.onclick = (e)=>{
+            e.stopPropagation();
+            const folder = state.folders.find(f=> f.id === el.dataset.id);
+            if(!folder) return;
+            showConfirmModal(`Delete "${folder.name}"? Its sessions are unaffected and stay in your Sessions list.`, ()=>{
+              state.folders = state.folders.filter(f=> f.id !== folder.id);
+              state.sessions.forEach(s=>{ if(s.folderId === folder.id) s.folderId = null; });
+              persistFolders();
+              persistSessions();
+              render();
+              showToast('🗑️ Folder removed');
+            });
+          };
+        }
       });
     }
+
+    document.getElementById('newSessionBtn').onclick = ()=>{
+      if(state.activeHomePage === 'folders'){
+        showNewFolderModal();
+      } else {
+        startNewSession();
+      }
+    };
+  }
+
+  function folderCardHTML(f){
+    const count = state.sessions.filter(s=> s.folderId === f.id).length;
+    return `
+      <div class="folder-card" data-id="${f.id}">
+        <div class="folder-card-info">
+          <div class="folder-card-name">${escapeHtml(f.name)}</div>
+          <div class="folder-card-count">${count} session${count===1?'':'s'}</div>
+        </div>
+        <button class="icon-btn" data-delete-folder="${f.id}" title="Delete folder" style="pointer-events:auto;">&times;</button>
+      </div>`;
+  }
+
+  function showNewFolderModal(){
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    overlay.innerHTML = `
+      <div class="confirm-box">
+        <p class="confirm-message" style="margin-bottom:14px;">New folder</p>
+        <input type="text" id="newFolderNameInput" placeholder="e.g. Push Day" autocomplete="off"
+          style="width:100%;box-sizing:border-box;background:var(--surface-2);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:12px 14px;font-size:14px;font-family:inherit;margin-bottom:16px;">
+        <div class="confirm-actions">
+          <button class="confirm-no" id="newFolderCancel">Cancel</button>
+          <button class="confirm-yes" id="newFolderCreate">Create</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    requestAnimationFrame(()=> overlay.classList.add('show'));
+    const input = overlay.querySelector('#newFolderNameInput');
+    setTimeout(()=> input.focus(), 250);
+
+    function close(){
+      overlay.classList.remove('show');
+      setTimeout(()=> overlay.remove(), 150);
+    }
+    function create(){
+      const name = input.value.trim();
+      if(!name){ input.focus(); return; }
+      state.folders.push({ id: uid(), name, createdAt: Date.now() });
+      persistFolders();
+      close();
+      render();
+      showToast('✅ Folder created!');
+    }
+    overlay.querySelector('#newFolderCancel').onclick = close;
+    overlay.querySelector('#newFolderCreate').onclick = create;
+    input.onkeydown = (e)=>{ if(e.key === 'Enter'){ e.preventDefault(); create(); } };
+    overlay.onclick = (e)=>{ if(e.target === overlay) close(); };
+  }
+
+  function renderFolderView(){
+    app.style.height = '';
+    app.style.overflow = '';
+    const folder = state.folders.find(f=> f.id === state.folderViewId);
+    if(!folder){ state.view = 'home'; return render(); }
+    const sessions = state.sessions
+      .filter(s=> s.folderId === folder.id)
+      .sort((a,b)=> (b.createdAt||0) - (a.createdAt||0));
+
+    let html = `
+      <div class="topbar">
+        <button class="icon-btn" id="backBtn">&#8592;</button>
+        <span></span>
+      </div>
+      <div class="editor-header">
+        <h1>${escapeHtml(folder.name)}</h1>
+      </div>
+      <div class="session-list">
+        <div class="list-heading">
+          <h2 style="font-size:14px;color:var(--text-dim)">Sessions</h2>
+          <span class="count">${sessions.length}</span>
+        </div>
+        ${sessions.length ? sessions.map(s => sessionCardHTML(s)).join('') : `<div class="empty-ex-hint">No sessions in this folder yet. Assign one from a session's edit screen.</div>`}
+      </div>
+    `;
+    app.innerHTML = html;
+    document.getElementById('backBtn').onclick = ()=>{
+      state.view = 'home';
+      state.folderViewId = null;
+      render();
+    };
+    document.querySelectorAll('.session-card').forEach(wireSessionCardInteractions);
   }
 
   function sessionCardHTML(s){
@@ -1568,6 +1849,8 @@
   }
 
   function renderSettings(){
+    app.style.height = '';
+    app.style.overflow = '';
     let html = `
       <div class="topbar">
         <button class="icon-btn" id="backBtn">&#8592;</button>
@@ -1636,7 +1919,7 @@
           <button class="add-preset-btn" id="newPresetBtn">+ New Preset</button>
         </div>
 
-        <div class="app-version">Iron Log &middot; v2.8</div>
+        <div class="app-version">Iron Log &middot; v3.1</div>
       </div>
     `;
     app.innerHTML = html;
@@ -1690,6 +1973,8 @@
   }
 
   function renderPresetEditor(){
+    app.style.height = '';
+    app.style.overflow = '';
     const p = state.presetDraft;
     const isEditing = !!state.presetEditingId;
     const hasExercises = p.exercises.length > 0;
@@ -1894,6 +2179,52 @@
     });
   }
 
+  function showFolderPickerModal(){
+    const d = state.draft;
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    const noneRow = `
+      <div class="preset-pick-item" data-folder-id="">
+        <div>
+          <div class="preset-row-name">None</div>
+          <div class="preset-row-sub">Not filed in a folder</div>
+        </div>
+        <span class="chevron-right">&#8250;</span>
+      </div>`;
+    const folderRows = state.folders.map(f=> `
+      <div class="preset-pick-item" data-folder-id="${f.id}">
+        <div>
+          <div class="preset-row-name">${escapeHtml(f.name)}</div>
+        </div>
+        <span class="chevron-right">&#8250;</span>
+      </div>
+    `).join('');
+    overlay.innerHTML = `
+      <div class="confirm-box" style="max-width:360px;">
+        <p class="confirm-message" style="margin-bottom:14px;">Choose a folder</p>
+        <div class="preset-pick-list">${noneRow}${folderRows}</div>
+        <div class="confirm-actions">
+          <button class="confirm-no" id="folderPickCancel" style="flex:1">Cancel</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    requestAnimationFrame(()=> overlay.classList.add('show'));
+    function close(){
+      overlay.classList.remove('show');
+      setTimeout(()=> overlay.remove(), 150);
+    }
+    overlay.querySelector('#folderPickCancel').onclick = close;
+    overlay.onclick = (e)=>{ if(e.target === overlay) close(); };
+    overlay.querySelectorAll('.preset-pick-item').forEach(el=>{
+      el.onclick = ()=>{
+        d.folderId = el.dataset.folderId || null;
+        close();
+        render();
+      };
+    });
+  }
+
   function startNewSession(){
     state.draft = {
       id: uid(),
@@ -1901,6 +2232,7 @@
       time: '',
       name: '',
       notes: '',
+      folderId: null,
       exercises: [],
       createdAt: Date.now()
     };
@@ -1921,6 +2253,8 @@
   }
 
   function renderEditor(){
+    app.style.height = '';
+    app.style.overflow = '';
     const d = state.draft;
     const isEditing = !!state.editingId;
     const hasData = d.exercises.length > 0;
@@ -1956,6 +2290,10 @@
         <div style="padding:0 20px;">
           <button class="use-preset-row" id="usePresetBtn">
             <span>Use a preset</span>
+            <span class="chevron-right">&#8250;</span>
+          </button>
+          <button class="use-preset-row" id="folderPickBtn" style="margin-top:10px;">
+            <span>Folder: ${(()=>{ const f = state.folders.find(x=>x.id===d.folderId); return f ? escapeHtml(f.name) : 'None'; })()}</span>
             <span class="chevron-right">&#8250;</span>
           </button>
         </div>
@@ -1999,6 +2337,7 @@
     document.getElementById('timeInput').onchange = (e)=> d.time = e.target.value;
     document.getElementById('notesInput').oninput = (e)=> d.notes = e.target.value;
     document.getElementById('usePresetBtn').onclick = ()=> showPresetPickerModal();
+    document.getElementById('folderPickBtn').onclick = ()=> showFolderPickerModal();
 
     const newExInput = document.getElementById('newExInput');
     const suggestList = document.getElementById('suggestList');
@@ -2246,6 +2585,8 @@
   }
 
   function renderDetail(){
+    app.style.height = '';
+    app.style.overflow = '';
     const s = state.sessions.find(x=> x.id === state.detailId);
     if(!s){ state.view = 'home'; return render(); }
     const totalSets = s.exercises.reduce((sum,e)=> sum + e.sets.length, 0);
