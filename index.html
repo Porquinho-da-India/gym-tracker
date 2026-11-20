@@ -71,6 +71,35 @@
     background: var(--bg);
   }
 
+  /* ---------- Settings pop in / pop out (scales from screen center) ---------- */
+  @keyframes popIn{
+    from{ opacity: 0; transform: scale(0.9); }
+    to{ opacity: 1; transform: scale(1); }
+  }
+  @keyframes popOut{
+    from{ opacity: 1; transform: scale(1); }
+    to{ opacity: 0; transform: scale(0.94); }
+  }
+  @keyframes fadeInSoft{
+    from{ opacity: 0; }
+    to{ opacity: 1; }
+  }
+  #app.pop-in{
+    animation: popIn .26s cubic-bezier(.22,1,.36,1) both;
+  }
+  #app.pop-out{
+    animation: popOut .18s cubic-bezier(.4,0,1,1) both;
+    pointer-events: none;
+  }
+  /* opacity-only on purpose: a transform here would break the home
+     screen's position:fixed button while it animates */
+  #app.fade-in{
+    animation: fadeInSoft .22s ease-out both;
+  }
+  @media (prefers-reduced-motion: reduce){
+    #app.pop-in, #app.pop-out, #app.fade-in{ animation: none; }
+  }
+
   /* ---------- Top bar ---------- */
   .topbar{
     display:flex; align-items:center; justify-content:space-between;
@@ -1557,8 +1586,7 @@
       state.detailId = null;
       render();
     } else if(state.view === 'settings'){
-      state.view = 'home';
-      render();
+      closeSettings();
     } else if(state.view === 'folderView'){
       state.view = 'home';
       state.folderViewId = null;
@@ -1571,17 +1599,82 @@
   window.addEventListener('popstate', handleSystemBack);
 
   /* ---------------- RENDER ---------------- */
+  // Tracks the previously rendered view so we can tell a genuine navigation
+  // (home -> settings) apart from a re-render within the same screen (e.g.
+  // changing theme), which shouldn't replay the entrance animation.
+  let prevRenderedView = null;
+  let animTimer = null;
+  let closingSettings = false;
+  const POP_OUT_MS = 180;
+
+  function prefersReducedMotion(){
+    return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  }
+
+  // Scale from the middle of what's actually on screen, not the middle of
+  // the whole page — otherwise a tall, scrolled page would pop from off-screen.
+  function setPopOrigin(){
+    app.style.transformOrigin = '50% ' + Math.round(window.scrollY + window.innerHeight / 2) + 'px';
+  }
+
+  function restartAppAnimation(cls){
+    app.classList.remove('pop-in', 'pop-out', 'fade-in');
+    void app.offsetWidth; // force a reflow so the animation restarts cleanly
+    app.classList.add(cls);
+  }
+
+  function playPopIn(){
+    setPopOrigin();
+    restartAppAnimation('pop-in');
+    clearTimeout(animTimer);
+    animTimer = setTimeout(()=>{
+      app.classList.remove('pop-in');
+      app.style.transformOrigin = '';
+    }, 340);
+  }
+
+  function playFadeIn(){
+    restartAppAnimation('fade-in');
+    clearTimeout(animTimer);
+    animTimer = setTimeout(()=> app.classList.remove('fade-in'), 280);
+  }
+
+  // Leaving Settings: shrink/fade the page out first, THEN swap to home.
+  // The guard stops a double-tap from starting two transitions.
+  function closeSettings(){
+    if(state.view !== 'settings' || closingSettings) return;
+    const finish = ()=>{
+      closingSettings = false;
+      app.classList.remove('pop-out');
+      app.style.transformOrigin = '';
+      state.view = 'home';
+      render();
+    };
+    if(prefersReducedMotion()){ finish(); return; }
+    closingSettings = true;
+    setPopOrigin();
+    clearTimeout(animTimer);
+    restartAppAnimation('pop-out');
+    setTimeout(finish, POP_OUT_MS);
+  }
+
   function render(){
     if(state.view === 'loading'){
       app.innerHTML = '';
       return;
     }
+    const prev = prevRenderedView;
     if(state.view === 'home') renderHome();
     else if(state.view === 'editor') renderEditor();
     else if(state.view === 'detail') renderDetail();
     else if(state.view === 'settings') renderSettings();
     else if(state.view === 'presetEditor') renderPresetEditor();
     else if(state.view === 'folderView') renderFolderView();
+    // Only animate genuine home <-> settings navigation, never re-renders
+    // within the same screen (theme toggle, accent picks, etc.).
+    if(state.view === 'settings' && prev === 'home') playPopIn();
+    else if(state.view === 'home' && prev === 'settings') playFadeIn();
+    prevRenderedView = state.view;
     syncHistoryForCurrentView();
   }
 
@@ -1970,11 +2063,11 @@
           <button class="add-preset-btn" id="newPresetBtn">+ New Preset</button>
         </div>
 
-        <div class="app-version">Iron Log &middot; v3.2</div>
+        <div class="app-version">Iron Log &middot; v3.4</div>
       </div>
     `;
     app.innerHTML = html;
-    document.getElementById('backBtn').onclick = ()=>{ state.view = 'home'; render(); };
+    document.getElementById('backBtn').onclick = closeSettings;
     document.getElementById('themeToggle').querySelectorAll('button').forEach(b=>{
       b.onclick = ()=> setTheme(b.dataset.theme);
     });
